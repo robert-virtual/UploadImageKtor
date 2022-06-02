@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.MediaMetadata
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
@@ -22,15 +24,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.lang.Exception
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    val httpClient = HttpClient(CIO)
-    var file:File? = null
+    lateinit var uri:Uri
+    private lateinit var fileName:String
+    lateinit var fileExt:String
+    lateinit var bytesArray:ByteArray
 
-    val requestLauncher = registerForActivityResult(
+    private val requestLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ){
         if (it){
@@ -42,16 +45,29 @@ class MainActivity : AppCompatActivity() {
     ){
         if (it.resultCode == Activity.RESULT_OK){
             if (it.data != null){
-                val uri:Uri = it.data!!.data as Uri
+                uri= it.data!!.data as Uri
                 val thumbnail: Bitmap =
                     applicationContext.contentResolver.loadThumbnail(
                         uri, Size(640, 480), null)
                 binding.img.setImageBitmap(thumbnail)
-                file = it.data!!.data?.encodedPath?.let { it1 -> File(it1) }
-                if (file != null){
-                    binding.btnUpload.visibility = View.VISIBLE
+
+
+                val resolver = applicationContext.contentResolver
+                val stream = resolver.openInputStream(uri)
+                val query = contentResolver.query(uri,null,null,null,null)
+                query.use {cursor->
+                    cursor?.moveToFirst()
+                    val nameColumn = cursor?.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                    val extColumn = cursor?.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+                    if (nameColumn != null && extColumn != null){
+                        fileName = cursor.getString(nameColumn)
+                        fileExt = cursor.getString(extColumn)
+                        Toast.makeText(this,"$fileName $fileExt", Toast.LENGTH_SHORT).show()
+                    }
+
                 }
-                Toast.makeText(this, "${file?.name}.${file?.extension}", Toast.LENGTH_SHORT).show()
+                bytesArray = stream?.readBytes() ?: throw Exception("bytes array null")
+                binding.btnUpload.visibility = View.VISIBLE
             }
         }
     }
@@ -65,21 +81,23 @@ class MainActivity : AppCompatActivity() {
             getResult.launch(i)
         }
         binding.btnUpload.setOnClickListener {
-            if (file != null){
                 CoroutineScope(Dispatchers.IO).launch {
+
                     try {
-                        httpClient.submitFormWithBinaryData(
+                        KtorClient.httpClient.submitFormWithBinaryData(
                             url = "https://twitter-z.herokuapp.com/posts",
                             formData = formData {
                                 append("content",binding.tweet.text.toString())
-                                append(
-                                    "images",
-                                    file!!.readBytes(),
-                                    Headers.build {
-                                        append(HttpHeaders.ContentType,"image/jpg")
-                                        append(HttpHeaders.ContentDisposition,"filename=${file!!.name}.jpg")
+                                    for (i in 0..1){
+                                        append(
+                                            "images",
+                                            bytesArray,
+                                            Headers.build {
+                                                append(HttpHeaders.ContentType,fileExt)
+                                                append(HttpHeaders.ContentDisposition,"filename=$fileName")
+                                            }
+                                        )
                                     }
-                                )
 
                             }
                         )
@@ -90,17 +108,16 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        }
     }
-    fun askPermission(){
-        when{
+    private fun askPermission(){
+        when (PackageManager.PERMISSION_GRANTED) {
             ContextCompat.checkSelfPermission(
                 this,
                 android.Manifest.permission.READ_EXTERNAL_STORAGE
-            ) == PackageManager.PERMISSION_GRANTED->{
+            ) -> {
 
             }
-            else->{
+            else -> {
                 requestLauncher.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
             }
         }
